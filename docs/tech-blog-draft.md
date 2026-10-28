@@ -85,11 +85,98 @@ Go ランタイム自身には「cgroup ファイルを再読み込みする仕�
 
 | 項目 | コンテナ（Kubernetes 側） | Go ランタイム（アプリ側） |
 | :--- | :--- | :--- |
-| **認識している上限** | **1.0 GiB**（広がった！） | **460 MiB**（古いまま凍結） |
-| **使用量が 400 MiB 時の挙動** | 「まだ 600 MiB も余裕がある」 | 「上限突破寸前！超高頻度で GC を回せ！」 |
+| **認識している上限** | **1.0 GiB**（拡張済み） | **460 MiB**（古いまま凍結） |
+| **使用量が 400 MiB 時の挙動** | 余白 600 MiB（通常動作） | 上限逼迫と判定し、GC を高頻度にトリガー（CPU 浪費） |
 
 - **結果**:  
   **メモリは 600MB も余っているのに、無駄に GC が回り続けて CPU を無駄食いし、アプリの応答が遅くなる**。
+
+---
+
+## 第 4 章：解決編：cgroup v2 を監視して GOMEMLIMIT をリアルタイム追従させる
+
+### 4.1 アプローチと実装骨格
+Go ランタイム自身が監視を行わないのであれば、**アプリケーションプロセス側で `/sys/fs/cgroup/memory.max` を監視し、変更を検知したタイミングで `runtime/debug.SetMemoryLimit()` を動的に更新する** アプローチを取ります。
+
+監視ループから定期的に実行される更新処理の骨格（[`pkg/watcher/watcher.go`](https://github.com/AobaIwaki123/inplace-gomemlimit/blob/main/pkg/watcher/watcher.go#L106-L130)）です。
+
+```go
+func (w *Watcher) update() error {
+    // 1. cgroup v2 の memory.max を取得
+    data, err := os.ReadFile("/sys/fs/cgroup/memory.max")
+    if err != nil {
+        return err
+    }
+    maxBytes, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+
+    // 2. 変更がなければスキップ
+    if maxBytes == w.lastCgroup {
+        return nil
+    }
+
+    // 3. 上限が変化していれば、指定比率（デフォルト 90%）で Go ランタイムを更新
+    targetLimit := int64(float64(maxBytes) * w.opts.Ratio)
+    oldLimit := debug.SetMemoryLimit(targetLimit)
+    w.lastCgroup = maxBytes
+
+    // 4. 構造化ログを出力
+    slog.Info("inplace-gomemlimit: updated GOMEMLIMIT in-place",
+        "cgroup_max_bytes", maxBytes,
+        "old_gomemlimit", oldLimit,
+        "new_gomemlimit", targetLimit,
+    )
+    return nil
+}
+```
+
+### 4.2 `resizePolicy: NotRequired` の仕様と役割
+Kubernetes で In-Place Resize を利用する際、マニフェスト内で `resizePolicy` を宣言します。
+
+- **公式仕様書**: [Resize CPU and Memory Resources assigned to containers](https://kubernetes.io/docs/tasks/configure-pod-container/resize-container-resources/)
+- **設計書**: [KEP-1287: In-Place Update of Pod Resources](https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/1287-in-place-update-pod-resources)
+
+```yaml
+resizePolicy:
+  - resourceName: memory
+    restartPolicy: NotRequired    # メモリ変更時にコンテナを再起動しない
+  - resourceName: cpu
+    restartPolicy: NotRequired    # CPU 変更時もコンテナを再起動しない
+```
+
+`NotRequired` を明示することで、メモリ拡張時にコンテナが再起動されるのを防ぎます。
+
+### 4.3 プリミティブ API による信頼性の担保
+ログに表示される `old_gomemlimit` は、単なる推定値ではなく、Go 標準関数 [`runtime/debug.SetMemoryLimit(limit int64) int64`](https://github.com/golang/go/blob/go1.24.0/src/runtime/debug/garbage.go#L44-L63) の**戻り値（変更前にランタイム内部で実際に有効だった真値）**をそのまま出力しています。
+
+これにより、内部での設定反映の成否が客観的に保証されます。
+
+### 4.4 検証手順と実機追従ログ
+
+#### 手順
+1. **マニフェストの適用**:
+   ```bash
+   kubectl apply -f manifests/demo-pod.yaml
+   ```
+2. **インプレース拡張の実行**:
+   ```bash
+   kubectl patch --subresource=resize pod demo-inplace-gomemlimit \
+     --patch '{"spec":{"containers":[{"name":"app","resources":{"limits":{"memory":"1Gi"}}}]}}'
+   ```
+3. **確認**:
+   Pod の再起動回数（`RESTARTS: 0`）を維持したまま、以下の構造化ログが出力されることを確認します。
+
+```json
+{
+  "time": "2026-10-28T11:35:37Z",
+  "level": "INFO",
+  "msg": "inplace-gomemlimit: updated GOMEMLIMIT in-place",
+  "cgroup_max_bytes": 1073741824,
+  "cgroup_max_human": "1.0 GiB",
+  "old_gomemlimit": "450.0 MiB",
+  "new_gomemlimit": "921.6 MiB",
+  "ratio": 0.9
+}
+```
 
 ---
 
