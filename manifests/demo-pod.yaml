@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: demo-inplace-gomemlimit
+  labels:
+    app: demo-inplace-gomemlimit
+spec:
+  restartPolicy: Never
+  containers:
+    - name: app
+      image: ghcr.io/aobaiwaki123/inplace-gomemlimit-demo:latest
+      imagePullPolicy: IfNotPresent
+      resizePolicy:
+        - resourceName: memory
+          restartPolicy: NotRequired
+        - resourceName: cpu
+          restartPolicy: NotRequired
+      resources:
+        limits:
+          memory: "512Mi"
+          cpu: "200m"
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+      ports:
+        - containerPort: 8080
+          name: http

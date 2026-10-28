@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Run Tests with Race Detector
+        run: |
+          go test -v -race ./...
+
+      - name: Build Demo Binary
+        run: |
+          CGO_ENABLED=0 go build -ldflags="-s -w -extldflags '-static'" -trimpath -o bin/demo-app ./cmd/demo-app
