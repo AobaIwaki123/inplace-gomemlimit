@@ -106,8 +106,18 @@ Go ランタイム自身には「cgroup ファイルを再読み込みする仕�
 
 ## 第 4 章：解決編：cgroup v2 を監視して GOMEMLIMIT をリアルタイム追従させる
 
-### 4.1 アプローチとコア処理の実装
+### 4.1 アプローチと自作ライブラリによる検証
 Go ランタイム自身が監視を行わないのであれば、**アプリケーションプロセス側で `/sys/fs/cgroup/memory.max` を監視し、変更を検知したタイミングで `runtime/debug.SetMemoryLimit()` を動的に更新する** アプローチを取ります。
+
+#### 既存ライブラリとの違いと自作の理由
+Go のメモリ上限自動設定には定番の `KimMachineGun/automemlimit` がありますが、今回検証用ライブラリ（`inplace-gomemlimit`）を自作した理由は、**「1 行インポートでの動的追従の可否」** にあります。
+
+| 項目 | `automemlimit` | 検証ライブラリ（`inplace-gomemlimit`） |
+| :--- | :--- | :--- |
+| **1 行インポート時の挙動** | **起動時に 1 回実行して終了**（枠が増えても追従しない） | **常時監視し、枠が増えたら自動追従する** |
+| **動的追従させるための手順** | `main.go` 内に初期化コードを明示的に書く必要がある | **1 行インポートするだけで完結** |
+
+`automemlimit` で広く使われている 1 行インポート（ブランクインポート）は、コンテナ起動時に 1 回だけ上限を設定する前提で作られており、そのままでは In-Place Resize に追従できません。そこで、1 行インポートするだけで動的リサイズに自動追従する最小限の仕組みを実証するために本ライブラリを作成しました。
 
 以下は、定期的な監視ループの中で実行される更新処理のコード（[`pkg/watcher/watcher.go`](https://github.com/AobaIwaki123/inplace-gomemlimit/blob/main/pkg/watcher/watcher.go#L106-L130)）です。
 
@@ -159,7 +169,7 @@ resizePolicy:
 ### 4.3 Go ランタイム内部の切り替えを確認する仕組み
 監視処理で出力しているログの `old_gomemlimit`（変更前の値）は、推測値ではありません。
 
-Go の標準関数 [`runtime/debug.SetMemoryLimit(limit int64) int64`](https://github.com/golang/go/blob/go1.24.0/src/runtime/debug/garbage.go#L44-L63) は、新しい上限を設定すると同時に**「直前までランタイム内で有効だった設定値」を戻り値として返す仕様**になっています。これを利用することで、Go ランタイム側で値が実際に切り替わったことを直接確認できます。
+Go の標準関数 [`runtime/debug.SetMemoryLimit(limit int64) int64`](https://github.com/golang/go/blob/go1.24.0/src/runtime/debug/garbage.go#L44-L63) は、新しい上限を設定すると同時に「**直前までランタイム内で有効だった設定値**」を戻り値として返す仕様になっています。これを利用することで、Go ランタイム側で値が実際に切り替わったことを直接確認できます。
 
 ### 4.4 実機での追従結果
 稼働中の Pod に対し、コンテナのメモリ上限を `512Mi` から `1Gi` に増やすパッチを適用しました。
@@ -188,7 +198,7 @@ Pod の再起動回数（`RESTARTS: 0`）を維持したまま、アプリケー
 ### 5.1 現状の回避策と課題
 現在は、本記事で実証したようなウォッチャーや、既存ライブラリ（`automemlimit` 等）の更新オプションを用いて、アプリケーション側から定期的に `SetMemoryLimit()` を実行するワークアラウンドが必要です。
 
-しかし本来は、アプリケーションが個別に監視ループを持つのではなく、ランタイム自身がインフラの変化に適応するのが最も理想的です。
+しかし本来は、アプリ側でわざわざ監視コードを入れなくても、Go 言語が自動でメモリ増加に気づいてくれるのが理想的です。
 
 ### 5.2 Go 言語本体での検討状況（Issue #75164）
 - **CPU 側の先行**: Go 1.25 において、CPU 制限（`GOMAXPROCS`）の cgroup 自動認識が標準機能として導入されました。
@@ -205,16 +215,21 @@ Kubernetes などのインフラ基盤が動的に進化する中で、中の言
 
 実機検証を手元で再現するためのコマンド手順です。
 
-1. **マニフェストの適用**:
+1. **リポジトリのクローンと移動**:
+   ```bash
+   git clone https://github.com/AobaIwaki123/inplace-gomemlimit.git
+   cd inplace-gomemlimit
+   ```
+2. **マニフェストの適用**:
    ```bash
    kubectl apply -f manifests/demo-pod.yaml
    ```
-2. **インプレース拡張の実行**:
+3. **インプレース拡張の実行**:
    ```bash
    kubectl patch --subresource=resize pod demo-inplace-gomemlimit \
      --patch '{"spec":{"containers":[{"name":"app","resources":{"limits":{"memory":"1Gi"}}}]}}'
    ```
-3. **ログの確認**:
+4. **ログの確認**:
    ```bash
    kubectl logs -f demo-inplace-gomemlimit
    ```
