@@ -7,7 +7,7 @@
 > 2. **執筆時点（2026 年 10 月）の最新バージョンとリリース日**:
 >    - **Go**: Go 1.27.3（2026 年 10 月 20 日リリース）
 >    - **Kubernetes**: v1.37.1（2026 年 9 月 23 日リリース）
->    - ※ 本記事の実機ログは、手元の検証クラスタ（v1.33.4+k0s）での予備検証（参考結果）として扱います。
+>    - ※ 本記事の実機ログは、手元の検証クラスタ（v1.36.4+k0s: In-Place Resize GA 後の環境）で取得した検証結果です。
 
 ---
 
@@ -52,7 +52,7 @@ Kubernetes 1.27+ で策定された In-Place Pod Vertical Scaling (KEP-1287) に
 
 ---
 
-## 第 2 章：実機検証：メモリが動的に変わったとき、Go アプリの内部で何が起きたか？（予備検証）
+## 第 2 章：実機検証：メモリが動的に変わったとき、Go アプリの内部で何が起きたか？
 
 ### 2.1 実験 ①：メモリ削減の罠（k8s API による拒絶）
 稼働中の Pod のメモリ上限を `512Mi` から `256Mi` に減らすパッチを実行したところ、以下のエラーで拒絶されました。
@@ -176,22 +176,15 @@ Go の標準関数 [`runtime/debug.SetMemoryLimit(limit int64) int64`](https://g
 ### 4.4 実機での追従結果
 稼働中の Pod に対し、コンテナのメモリ上限を `512Mi` から `1Gi` に増やすパッチを適用しました。
 
-Pod の再起動回数（`RESTARTS: 0`）を維持したまま、アプリケーション側で以下の構造化ログが出力されます。
+Pod の再起動回数（`RESTARTS: 0`）を維持したまま、アプリケーション側で以下のログが出力され、動的に追従したことを確認しました。
 
-```json
-{
-  "time": "2026-10-28T11:35:37Z",
-  "level": "INFO",
-  "msg": "inplace-gomemlimit: updated GOMEMLIMIT in-place",
-  "cgroup_max_bytes": 1073741824,
-  "cgroup_max_human": "1.0 GiB",
-  "old_gomemlimit": "450.0 MiB",
-  "new_gomemlimit": "921.6 MiB",
-  "ratio": 0.9
-}
+```text
+{"time":"2026-10-28T04:38:27Z","level":"INFO","msg":"runtime memory status","cgroup_max":"536870912","gomemlimit":"460.8 MiB"}
+{"time":"2026-10-28T04:38:28Z","level":"INFO","msg":"INFO inplace-gomemlimit: updated GOMEMLIMIT in-place cgroup_max_bytes=1073741824 cgroup_max_human=\"1.0 GiB\" old_gomemlimit=\"460.8 MiB\" new_gomemlimit=\"921.6 MiB\" ratio=0.9"}
+{"time":"2026-10-28T04:38:30Z","level":"INFO","msg":"runtime memory status","cgroup_max":"1073741824","gomemlimit":"921.6 MiB"}
 ```
 
-ログの通り、コンテナの上限が `1.0 GiB` に広がったことを検知し、Go ランタイムのメモリ上限が古い `450.0 MiB` から新しい `921.6 MiB` へと即座に切り替わっていることが確認できます。
+ログの通り、コンテナの上限が `1.0 GiB` に広がったことを検知し、Go ランタイムのメモリ上限が直前の `460.8 MiB` から新しい `921.6 MiB` へと即座に切り替わっていることが確認できます。
 
 ---
 
@@ -253,8 +246,7 @@ Go の `GOMEMLIMIT` が直接制御できるのは、あくまで Go ランタ�
    ```
 3. **インプレース拡張の実行**:
    ```bash
-   kubectl patch --subresource=resize pod demo-inplace-gomemlimit \
-     --patch '{"spec":{"containers":[{"name":"app","resources":{"limits":{"memory":"1Gi"}}}]}}'
+   kubectl patch --subresource=resize pod demo-inplace-gomemlimit --patch-file manifests/resize-patch.yaml
    ```
 4. **ログの確認**:
    ```bash

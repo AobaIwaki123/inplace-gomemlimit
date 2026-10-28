@@ -8,7 +8,7 @@ RUN go mod download || true
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w -extldflags '-static'" \
     -trimpath \
     -o /workspace/bin/demo-app ./cmd/demo-app
