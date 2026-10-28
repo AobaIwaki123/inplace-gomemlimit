@@ -106,10 +106,10 @@ Go ランタイム自身には「cgroup ファイルを再読み込みする仕�
 
 ## 第 4 章：解決編：cgroup v2 を監視して GOMEMLIMIT をリアルタイム追従させる
 
-### 4.1 アプローチと実装骨格
+### 4.1 アプローチとコア処理の実装
 Go ランタイム自身が監視を行わないのであれば、**アプリケーションプロセス側で `/sys/fs/cgroup/memory.max` を監視し、変更を検知したタイミングで `runtime/debug.SetMemoryLimit()` を動的に更新する** アプローチを取ります。
 
-監視ループから定期的に実行される更新処理の骨格（[`pkg/watcher/watcher.go`](https://github.com/AobaIwaki123/inplace-gomemlimit/blob/main/pkg/watcher/watcher.go#L106-L130)）です。
+以下は、定期的な監視ループの中で実行される更新処理のコード（[`pkg/watcher/watcher.go`](https://github.com/AobaIwaki123/inplace-gomemlimit/blob/main/pkg/watcher/watcher.go#L106-L130)）です。
 
 ```go
 func (w *Watcher) update() error {
@@ -140,10 +140,10 @@ func (w *Watcher) update() error {
 }
 ```
 
-### 4.2 `resizePolicy: NotRequired` の仕様と役割
+### 4.2 `resizePolicy: NotRequired` の役割
 Kubernetes で In-Place Resize を利用する際、マニフェスト内で `resizePolicy` を宣言します。
 
-- **公式仕様書**: [Resize CPU and Memory Resources assigned to containers](https://kubernetes.io/docs/tasks/configure-pod-container/resize-container-resources/)
+- **仕様書**: [Resize CPU and Memory Resources assigned to containers](https://kubernetes.io/docs/tasks/configure-pod-container/resize-container-resources/)
 - **設計書**: [KEP-1287: In-Place Update of Pod Resources](https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/1287-in-place-update-pod-resources)
 
 ```yaml
@@ -154,27 +154,17 @@ resizePolicy:
     restartPolicy: NotRequired    # CPU 変更時もコンテナを再起動しない
 ```
 
-`NotRequired` を明示することで、メモリ拡張時にコンテナが再起動されるのを防ぎます。
+仕様書（KEP-1287）にある通り、`restartPolicy: NotRequired` を明示しておくことで、メモリ拡張時にコンテナが再起動されるのを防ぎます。
 
-### 4.3 プリミティブ API による信頼性の担保
-ログに表示される `old_gomemlimit` は、単なる推定値ではなく、Go 標準関数 [`runtime/debug.SetMemoryLimit(limit int64) int64`](https://github.com/golang/go/blob/go1.24.0/src/runtime/debug/garbage.go#L44-L63) の**戻り値（変更前にランタイム内部で実際に有効だった真値）**をそのまま出力しています。
+### 4.3 Go ランタイム内部の切り替えを確認する仕組み
+監視処理で出力しているログの `old_gomemlimit`（変更前の値）は、推測値ではありません。
 
-これにより、内部での設定反映の成否が客観的に保証されます。
+Go の標準関数 [`runtime/debug.SetMemoryLimit(limit int64) int64`](https://github.com/golang/go/blob/go1.24.0/src/runtime/debug/garbage.go#L44-L63) は、新しい上限を設定すると同時に**「直前までランタイム内で有効だった設定値」を戻り値として返す仕様**になっています。これを利用することで、Go ランタイム側で値が実際に切り替わったことを直接確認できます。
 
-### 4.4 検証手順と実機追従ログ
+### 4.4 実機での追従結果
+稼働中の Pod に対し、コンテナのメモリ上限を `512Mi` から `1Gi` に増やすパッチを適用しました。
 
-#### 手順
-1. **マニフェストの適用**:
-   ```bash
-   kubectl apply -f manifests/demo-pod.yaml
-   ```
-2. **インプレース拡張の実行**:
-   ```bash
-   kubectl patch --subresource=resize pod demo-inplace-gomemlimit \
-     --patch '{"spec":{"containers":[{"name":"app","resources":{"limits":{"memory":"1Gi"}}}]}}'
-   ```
-3. **確認**:
-   Pod の再起動回数（`RESTARTS: 0`）を維持したまま、以下の構造化ログが出力されることを確認します。
+Pod の再起動回数（`RESTARTS: 0`）を維持したまま、アプリケーション側で以下の構造化ログが出力されます。
 
 ```json
 {
@@ -188,6 +178,8 @@ resizePolicy:
   "ratio": 0.9
 }
 ```
+
+ログの通り、コンテナの上限が `1.0 GiB` に広がったことを検知し、Go ランタイムのメモリ上限が古い `450.0 MiB` から新しい `921.6 MiB` へと即座に切り替わっていることが確認できます。
 
 ---
 
@@ -206,3 +198,23 @@ resizePolicy:
 Kubernetes などのインフラ基盤が動的に進化する中で、中の言語ランタイムがどのように協調していくかは、今後のクラウドネイティブ環境における重要なテーマです。
 
 アプリケーション側での対症療法に頼らずに済むよう、Go 言語標準での自動認識機能の進展とサポートを今後も注視していきたいと思います。
+
+---
+
+## 付録：手元での再現手順
+
+実機検証を手元で再現するためのコマンド手順です。
+
+1. **マニフェストの適用**:
+   ```bash
+   kubectl apply -f manifests/demo-pod.yaml
+   ```
+2. **インプレース拡張の実行**:
+   ```bash
+   kubectl patch --subresource=resize pod demo-inplace-gomemlimit \
+     --patch '{"spec":{"containers":[{"name":"app","resources":{"limits":{"memory":"1Gi"}}}]}}'
+   ```
+3. **ログの確認**:
+   ```bash
+   kubectl logs -f demo-inplace-gomemlimit
+   ```
