@@ -30,7 +30,7 @@
 - **第 4 章**: 解決編：cgroup v2 を監視して GOMEMLIMIT をリアルタイム追従させる
 - **第 5 章**: 今後の展望：Go 言語本体における標準サポートの検討状況
 - **コラム**: （おまけ）なぜ「90%」の決め打ちが難しいのか？（ヒープと RSS の壁）
-- **付録 1**: 手元での再現手順
+- **付録 1**: 実機検証の再現手順（詳細手順書へのリンク）
 - **付録 2**: 用語集（Glossary）
 - **参考リンク・文献**: 公式ドキュメントと関連リソース
 
@@ -230,27 +230,11 @@ Go の `GOMEMLIMIT` が直接制御できるのは、あくまで Go ランタ�
 
 ---
 
-## 付録 1：手元での再現手順
+## 付録 1：実機検証の再現手順
 
-実機検証を手元で再現するためのコマンド手順です。
+本記事で実施した実機検証（Pod の起動、パッチの適用、動的追従ログの確認）を手元で再現するための詳細な手順書は、リポジトリ内の [docs/reproduction-guide.md](https://github.com/AobaIwaki123/inplace-gomemlimit/blob/main/docs/reproduction-guide.md) にまとめています。
 
-1. **リポジトリのクローンと移動**:
-   ```bash
-   git clone https://github.com/AobaIwaki123/inplace-gomemlimit.git
-   cd inplace-gomemlimit
-   ```
-2. **マニフェストの適用**:
-   ```bash
-   kubectl apply -f manifests/demo-pod.yaml
-   ```
-3. **インプレース拡張の実行**:
-   ```bash
-   kubectl patch --subresource=resize pod demo-inplace-gomemlimit --patch-file manifests/resize-patch.yaml
-   ```
-4. **ログの確認**:
-   ```bash
-   kubectl logs -f demo-inplace-gomemlimit
-   ```
+前提条件、クロスビルド、マニフェスト適用から後片付けまでの全ステップを記載していますので、手元で動作を試したい方はこちらをご参照ください。
 
 ---
 
