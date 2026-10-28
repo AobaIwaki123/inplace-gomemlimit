@@ -61,5 +61,37 @@ Forbidden: memory limits cannot be decreased unless resizePolicy is RestartConta
 
 ---
 
+## 第 3 章：なぜ Go ランタイムは追従できないのか？（GC と GOMEMLIMIT の内部構造）
+
+### 3.1 起動時に 1 度だけ固定される GOMEMLIMIT
+Go ランタイムは、起動時の `gcinit()` で 1 回だけ値を読み込み、内部変数に固定します。
+
+- **起動時の読み込み箇所**: [`src/runtime/mgc.go#L189`](https://github.com/golang/go/blob/go1.24.0/src/runtime/mgc.go#L189)
+  ```go
+  // gcinit() 内で 1 度だけ初期化される
+  gcController.init(readGOGC(), readGOMEMLIMIT())
+  ```
+- **動的変更の唯一の口**: [`runtime/debug.SetMemoryLimit()`](https://github.com/golang/go/blob/go1.24.0/src/runtime/debug/garbage.go#L44-L63)
+  ```go
+  // プログラム側から明示的に呼び出す必要がある
+  func SetMemoryLimit(limit int64) int64 {
+      return setMemoryLimit(limit)
+  }
+  ```
+
+Go ランタイム自身には「cgroup ファイルを再読み込みする仕組み」がないため、インフラ側で枠が広がっても自力では気づけません。
+
+### 3.2 発生する実害：メモリがあるのに CPU を食い潰す
+
+| 項目 | コンテナ（Kubernetes 側） | Go ランタイム（アプリ側） |
+| :--- | :--- | :--- |
+| **認識している上限** | **1.0 GiB**（広がった！） | **460 MiB**（古いまま凍結） |
+| **使用量が 400 MiB 時の挙動** | 「まだ 600 MiB も余裕がある」 | 「上限突破寸前！超高頻度で GC を回せ！」 |
+
+- **結果**:  
+  **メモリは 600MB も余っているのに、無駄に GC が回り続けて CPU を無駄食いし、アプリの応答が遅くなる**。
+
+---
+
 ## 第 5 章：おわりに（メモ）
 - 将来的な展望メモ：インフラとアプリが事前通知（シグナル等）で対話し、`FreeOSMemory()` 等でメモリを退避させてから安全にインプレース縮小する協調プロトコルの可能性。
