@@ -1,9 +1,9 @@
 # Go ランタイムは動的なコンテナ環境に追従できるのか？（cgroup v2 と GOMEMLIMIT の境界を追う）
 
-> **検証環境・執筆時点のバージョン前提**
-> - **Go**: `go1.27.3 darwin/arm64`（および最新の Go 1.28 系統）
-> - **Kubernetes**: `v1.33.4+k0s`（In-Place Resize Beta / v1.35 GA）
-> - **OS / Kernel**: Ubuntu 24.10, Linux Kernel 6.11 (cgroup v2)
+> **記事の執筆時点・対象バージョン**
+> - **Go**: Go 1.27〜1.28 時代
+> - **Kubernetes**: v1.33〜v1.35（In-Place Pod Resize が Beta / GA となる世代）
+> - **Linux cgroup**: cgroup v2
 
 ---
 
