@@ -30,14 +30,16 @@
 - **第 4 章**: 解決編：cgroup v2 を監視して GOMEMLIMIT をリアルタイム追従させる
 - **第 5 章**: 今後の展望：Go 言語本体における標準サポートの検討状況
 - **コラム**: （おまけ）なぜ「90%」の決め打ちが難しいのか？（ヒープと RSS の壁）
-- **付録**: 手元での再現手順
+- **付録 1**: 手元での再現手順
+- **付録 2**: 用語集（Glossary）
+- **参考リンク・文献**: 公式ドキュメントと関連リソース
 
 ---
 
 ## 第 1 章：前提知識：Go のメモリ管理とコンテナの動的リサイズ
 
 ### 1.1 Go の GC と GOMEMLIMIT の基礎
-Go のガベージコレクション（GC）は、デフォルトで「**前回の掃除後のヒープサイズの 2 倍（GOGC=100）**」に達した時点で次の GC を実行します。
+Go のガベージコレクション（GC）は、デフォルトで「**前回の掃除後のヒープサイズの 2 倍（GOGC=100）**」に達した時点で次の GC を実行します（詳細は [A Guide to the Go Garbage Collector](https://go.dev/doc/gc-guide) を参照）。
 
 - **問題点**: Go ランタイムはコンテナの外側のメモリ上限（例: 500MB）を自動認識しないため、2 倍を目指してヒープを伸ばし、Linux カーネルの OOM Killer によって強制終了（`SIGKILL`, Exit Code 137）される問題が多発していました。
 - **GOMEMLIMIT の登場**: Go 1.19 で導入されたソフトメモリリミット。上限値（例: 450MB）を設定すると、メモリがその値に近づいた際に 2 倍ルールを無視して高頻度に GC を実行し、上限の手前でメモリ消費を抑え込みます。
@@ -231,7 +233,7 @@ Go の `GOMEMLIMIT` が直接制御できるのは、あくまで Go ランタ�
 
 ---
 
-## 付録：手元での再現手順
+## 付録 1：手元での再現手順
 
 実機検証を手元で再現するためのコマンド手順です。
 
@@ -252,3 +254,33 @@ Go の `GOMEMLIMIT` が直接制御できるのは、あくまで Go ランタ�
    ```bash
    kubectl logs -f demo-inplace-gomemlimit
    ```
+
+---
+
+## 付録 2：用語集（Glossary）
+
+| 用語 | 概要 |
+| :--- | :--- |
+| **`GOMEMLIMIT`** | Go 1.19 で導入されたソフトメモリ上限。上限値に達しそうになると GC を高頻度にトリガーし、メモリ消費を抑えて OOM Kill を防ぐ。 |
+| **In-Place Pod Resize (KEP-1287)** | Kubernetes で Pod やコンテナを再起動せずに、稼働中のまま CPU やメモリの割り当て枠を変更できる機能。 |
+| **cgroup v2 (`memory.max`)** | Linux カーネルが提供するプロセスグループ管理機構。コンテナのハードメモリ上限を指定し、超過すると OOM Killer が発動する。 |
+| **RSS (Resident Set Size)** | プロセスが物理メモリ（RAM）上に実際に保持している総容量。Go のヒープ以外にスタック、OS スレッド、cgo、I/O バッファを含む。 |
+| **Strategic Merge Patch** | Kubernetes 固有のパッチ形式。キー付きリストの既存要素を壊さずに、指定したフィールドだけを安全にマージ・更新する。 |
+
+---
+
+## 参考リンク・文献（References）
+
+### Go 公式ドキュメント・Issue
+- [A Guide to the Go Garbage Collector (公式 GC ガイド)](https://go.dev/doc/gc-guide)
+- [runtime/debug.SetMemoryLimit (公式 API リファレンス)](https://pkg.go.dev/runtime/debug#SetMemoryLimit)
+- [golang/go#75164: proposal: runtime: cgroup memory limit aware GOMEMLIMIT default](https://github.com/golang/go/issues/75164)
+- [golang/go#73193: runtime: make GOMAXPROCS aware of container CPU quota](https://github.com/golang/go/issues/73193)
+
+### Kubernetes 公式ドキュメント・設計書
+- [Resize CPU and Memory Resources assigned to containers (公式ドキュメント)](https://kubernetes.io/docs/tasks/configure-pod-container/resize-container-resources/)
+- [KEP-1287: In-Place Update of Pod Resources (公式設計仕様書)](https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/1287-in-place-update-pod-resources)
+
+### 関連ライブラリ・実装
+- [KimMachineGun/automemlimit (GitHub)](https://github.com/KimMachineGun/automemlimit)
+- [AobaIwaki123/inplace-gomemlimit (本記事の検証リポジトリ)](https://github.com/AobaIwaki123/inplace-gomemlimit)
