@@ -1,0 +1,6 @@
+spec:
+  containers:
+    - name: app
+      resources:
+        limits:
+          memory: "1Gi"
