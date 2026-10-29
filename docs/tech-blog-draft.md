@@ -48,15 +48,19 @@ Go のガベージコレクション（GC）は、デフォルトで「**前回�
 
 Kubernetes でのリソース自動調整といえば、Pod の台数を増減させる HPA（Horizontal Pod Autoscaler）が一般的ですが、メモリ消費量に応じて Pod 単体のスペックを拡張する VPA（Vertical Pod Autoscaler）も長年求められてきました。
 
-しかし、従来の Kubernetes において Pod は「一度作ったら設定変更できない不変（Immutable）な存在」でした。そのため、従来の VPA（`updateMode: "Recreate"`）には現場を悩ませる深刻な副作用がありました。
+しかし、従来の Kubernetes において Pod は「一度作ったら設定変更できない不変（Immutable）な存在」でした。そのため、従来の VPA（`updateMode: "Recreate"`）には現場を悩ませる深刻な副作用があり、国内の多くの SRE 現場でも **「予期せぬ Eviction（Pod 強制退去）によるダウンタイムが怖すぎて、本番では `updateMode: Off`（推奨値を眺めるだけ）でしか使えない」** という状態が続いていました。
 
-- **ピーク時の強制切断**: メモリが逼迫したまさにその瞬間に Pod が強制終了・再起動されるため、WebSocket や gRPC の常時接続が数万人規模で切断され、再接続スパイクを招く。
+具体的には、以下のような業務インパクトが発生します。
+
+- **ピーク時の強制切断**: メモリが逼迫したまさにその瞬間に Pod が強制終了・再起動されるため、WebSocket や gRPC の常時接続が数万人規模で切断され、再接続スパイク（Thundering Herd）を招く。
 - **長時間の計算が巻き戻る**: 数時間かけてメモリ上で計算していたバッチ処理や機械学習の途中データが消し飛び、最初からやり直しになる。
 - **キャッシュ消失とコールドスタート**: オンメモリに展開していたキャッシュデータが消え、再起動後のウォームアップに数十分かかって API レスポンスが著しく悪化する。
 
-「メモリ枠を広げたいだけなのに、なぜサービスを停止させなければならないのか」――この長年の痛みを解決するために策定されたのが、**KEP-1287: In-Place Update of Pod Resources** です（v1.27 Alpha、v1.33 Beta を経て v1.35 で正式に GA 到達）。
+「メモリ枠を広げたいだけなのに、なぜサービスを停止させなければならないのか」――この長年の痛みを解決するために策定されたのが、**[KEP-1287: In-Place Update of Pod Resources](https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/1287-in-place-update-pod-resources)** です（v1.27 Alpha、v1.33 Beta を経て v1.35 で正式に GA 到達）。
 
-この機能と VPA の新しいアップデートモード（`InPlaceOrRecreate`）により、Kubelet がコンテナ稼働中のまま Linux カーネルの cgroup 設定（`/sys/fs/cgroup/memory.max` 等）を直接書き換え、**再起動ゼロ（`restartPolicy: NotRequired`）でメモリ枠を動的に拡張できる時代** が到来しました。
+さらに、Kubernetes SIG-Autoscaling でも **[AEP-4016: Support for in-place updates in VPA](https://github.com/kubernetes/enhancements/tree/master/keps/sig-autoscaling/4016-in-place-updates-in-vpa)** が推進され、従来の破壊的な Eviction を脱して `InPlaceOrRecreate` モードへと移行する動きが標準化されつつあります。また、大手クラウド監視 SaaS の [Datadog の Kubernetes Autoscaling ドキュメント](https://docs.datadoghq.com/containers/kubernetes/autoscaling/) においても、インプレースリサイズを活用して Pod 再起動を防ぐ垂直スケーリングの重要性が大きくフィーチャーされています。
+
+これにより、Kubelet がコンテナ稼働中のまま Linux カーネルの cgroup 設定（`/sys/fs/cgroup/memory.max` 等）を直接書き換え、**再起動ゼロ（`restartPolicy: NotRequired`）でメモリ枠を動的に拡張できる時代** が本格的に到来しました。
 
 ---
 
